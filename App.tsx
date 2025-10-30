@@ -1,7 +1,6 @@
-
 import React, { useState, useCallback, useMemo } from 'react';
 import { generateDescription } from './services/geminiService';
-import { Status, PipelineStep, RequestLog } from './types';
+import { Status, PipelineStep, RequestLog, GenerationResult } from './types';
 import { Icon } from './components/Icon';
 
 const initialPipeline: PipelineStep[] = [
@@ -22,11 +21,13 @@ export default function App() {
   const [prompt, setPrompt] = useState<string>('');
   const [translate, setTranslate] = useState<boolean>(false);
   const [result, setResult] = useState<string>('');
+  const [seoKeywords, setSeoKeywords] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [pipeline, setPipeline] = useState<PipelineStep[]>(initialPipeline);
   const [requestLogs, setRequestLogs] = useState<RequestLog[]>([]);
-  const [cache, setCache] = useState<Map<string, string>>(new Map());
+  const [cache, setCache] = useState<Map<string, GenerationResult>>(new Map());
+  const [isApiDocsVisible, setIsApiDocsVisible] = useState<boolean>(false);
 
   const recentRequests = useMemo(() => {
     const now = Date.now();
@@ -39,13 +40,14 @@ export default function App() {
     );
   };
 
-  const resetPipeline = () => setPipeline(initialPipeline);
+  const resetPipeline = useCallback(() => setPipeline(initialPipeline), []);
 
   const handleGenerate = useCallback(async () => {
     setError('');
     setResult('');
+    setSeoKeywords([]);
     setIsLoading(true);
-    setPipeline(initialPipeline);
+    resetPipeline();
 
     // --- 1. Rate Limit Check ---
     updatePipelineStep('API Key & Rate Limit', Status.Pending);
@@ -78,7 +80,6 @@ export default function App() {
       setIsLoading(false);
       return;
     }
-    // Simple jailbreak check
     const blockedKeywords = ['ignore your instructions', 'reveal your prompt', 'system prompt'];
     if (blockedKeywords.some(keyword => prompt.toLowerCase().includes(keyword))) {
         const errorMsg = 'Prompt contains blocked keywords.';
@@ -94,12 +95,13 @@ export default function App() {
     updatePipelineStep('Cache Check', Status.Pending);
     if (cache.has(prompt)) {
       await new Promise(res => setTimeout(res, 500)); // Simulate cache retrieval
-      setResult(cache.get(prompt)!);
+      const cachedResult = cache.get(prompt)!;
+      setResult(cachedResult.description);
+      setSeoKeywords(cachedResult.seoKeywords);
       updatePipelineStep('Cache Check', Status.Success, 'Result retrieved from cache.');
       updatePipelineStep('Generate with AI', Status.Idle);
       updatePipelineStep('Output Validation', Status.Idle);
       setIsLoading(false);
-      // Log even cached requests for rate limiting
       setRequestLogs(prev => [...prev, { timestamp: Date.now(), prompt }]);
       return;
     }
@@ -111,27 +113,25 @@ export default function App() {
     const newRequestLog = { timestamp: Date.now(), prompt };
     setRequestLogs(prev => [...prev, newRequestLog]);
     
-    const generatedText = await generateDescription(prompt, translate);
+    try {
+        const generationResult = await generateDescription(prompt, translate);
+        updatePipelineStep('Generate with AI', Status.Success);
 
-    if (generatedText.toLowerCase().includes("invalid request.") || generatedText.startsWith("An error occurred")) {
-        setError(generatedText);
-        updatePipelineStep('Generate with AI', Status.Error, "AI detected an invalid request.");
+        // --- 5. Output Validation ---
+        updatePipelineStep('Output Validation', Status.Pending);
+        await new Promise(res => setTimeout(res, 300)); // Simulate validation
+        setResult(generationResult.description);
+        setSeoKeywords(generationResult.seoKeywords);
+        setCache(prev => new Map(prev).set(prompt, generationResult));
+        updatePipelineStep('Output Validation', Status.Success);
+    } catch (e) {
+        const err = e as Error;
+        setError(err.message);
+        updatePipelineStep('Generate with AI', Status.Error, "AI generation failed.");
+    } finally {
         setIsLoading(false);
-        return;
     }
-    updatePipelineStep('Generate with AI', Status.Success);
-
-
-    // --- 5. Output Validation ---
-    updatePipelineStep('Output Validation', Status.Pending);
-    // This is simulated, as sanitization is requested in the AI prompt.
-    await new Promise(res => setTimeout(res, 300));
-    setResult(generatedText);
-    setCache(prev => new Map(prev).set(prompt, generatedText));
-    updatePipelineStep('Output Validation', Status.Success);
-
-    setIsLoading(false);
-  }, [prompt, translate, requestLogs, recentRequests, cache]);
+  }, [prompt, translate, requestLogs, cache, resetPipeline]);
 
   const getStatusColor = (status: Status) => {
     switch (status) {
@@ -150,6 +150,51 @@ export default function App() {
       default: return <Icon name="clock" className="w-5 h-5" />;
     }
   };
+
+  const ApiDocs = () => (
+    <div className="bg-slate-800/50 rounded-xl shadow-lg shadow-slate-950/50 backdrop-blur-sm border border-slate-700">
+      <button 
+        className="w-full flex justify-between items-center p-4 text-left"
+        onClick={() => setIsApiDocsVisible(!isApiDocsVisible)}
+        aria-expanded={isApiDocsVisible}
+        aria-controls="api-docs-content"
+      >
+        <div className="flex items-center gap-3">
+          <Icon name="code" className="w-6 h-6 text-cyan-400" />
+          <h2 className="text-lg font-semibold text-slate-200">API for Developers</h2>
+        </div>
+        <Icon name={isApiDocsVisible ? 'chevron-up' : 'chevron-down'} className={`w-6 h-6 text-slate-400 transition-transform duration-300 ${isApiDocsVisible ? 'rotate-180' : ''}`} />
+      </button>
+      {isApiDocsVisible && (
+        <div id="api-docs-content" className="p-6 border-t border-slate-700 text-slate-300 space-y-4 animate-[fadeIn_0.5s_ease-out]">
+            <p>Integrate description generation into your application using our API endpoint.</p>
+            <div>
+              <h3 className="font-semibold mb-1">Endpoint</h3>
+              <pre className="bg-slate-900 p-3 rounded-md text-cyan-300 overflow-x-auto"><code>POST /api/generate</code></pre>
+            </div>
+             <div>
+              <h3 className="font-semibold mb-1">Request Body</h3>
+              <pre className="bg-slate-900 p-3 rounded-md text-amber-300 overflow-x-auto"><code>
+{`{
+  "prompt": "A short text describing the product.",
+  "apiKey": "YOUR_APP_KEY",
+  "translate": false
+}`}
+              </code></pre>
+            </div>
+            <div>
+              <h3 className="font-semibold mb-1">Success Response (200 OK)</h3>
+              <pre className="bg-slate-900 p-3 rounded-md text-green-300 overflow-x-auto"><code>
+{`{
+  "description": "The generated product description text...",
+  "seoKeywords": ["keyword1", "keyword2", "keyword3"]
+}`}
+              </code></pre>
+            </div>
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 font-sans bg-slate-900">
@@ -203,7 +248,6 @@ export default function App() {
                   </button>
                 </div>
                 
-                {/* Stats Panel */}
                 <div className="bg-slate-900/70 p-4 rounded-lg border border-slate-700">
                     <h3 className="text-sm font-semibold text-slate-300 mb-3">Usage Statistics</h3>
                     <div className="flex justify-around text-center">
@@ -226,7 +270,6 @@ export default function App() {
 
               {/* Right Column: Pipeline & Output */}
               <div className="w-full md:w-1/2 flex flex-col space-y-6">
-                {/* Pipeline Status */}
                 <div className="bg-slate-900/70 p-4 rounded-lg border border-slate-700 space-y-3">
                   <h3 className="text-sm font-semibold text-slate-300">Processing Pipeline</h3>
                   {pipeline.map(step => (
@@ -240,17 +283,35 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* Output Display */}
-                <div className="flex-grow bg-slate-900/70 p-4 rounded-lg border border-slate-700 min-h-[200px] flex items-center justify-center">
-                    {isLoading && !result && <Icon name="spinner" className="w-10 h-10 text-purple-400 animate-spin" />}
-                    {error && <div className="text-center text-red-400"><Icon name="x" className="mx-auto w-8 h-8 mb-2" />{error}</div>}
-                    {!isLoading && !error && !result && <div className="text-center text-slate-500"><Icon name="info" className="mx-auto w-8 h-8 mb-2" />Your generated description will appear here.</div>}
-                    {result && <div className="whitespace-pre-wrap text-slate-300 w-full h-full overflow-y-auto">{result}</div>}
+                <div className="flex-grow bg-slate-900/70 p-4 rounded-lg border border-slate-700 min-h-[200px] flex flex-col">
+                    {isLoading && !result && <div className="m-auto"><Icon name="spinner" className="w-10 h-10 text-purple-400 animate-spin" /></div>}
+                    {error && <div className="m-auto text-center text-red-400"><Icon name="x" className="mx-auto w-8 h-8 mb-2" />{error}</div>}
+                    {!isLoading && !error && !result && <div className="m-auto text-center text-slate-500"><Icon name="info" className="mx-auto w-8 h-8 mb-2" />Your generated description will appear here.</div>}
+                    {result && (
+                      <div className="flex flex-col h-full space-y-4">
+                        <div className="flex-grow whitespace-pre-wrap text-slate-300 w-full overflow-y-auto pr-2">{result}</div>
+                        {seoKeywords.length > 0 && (
+                          <div className="flex-shrink-0 border-t border-slate-700 pt-3">
+                            <h4 className="text-sm font-semibold text-slate-400 mb-2">SEO Keywords</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {seoKeywords.map(keyword => (
+                                <span key={keyword} className="bg-cyan-900/50 text-cyan-300 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                                  {keyword}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                 </div>
               </div>
             </div>
           </div>
         </div>
+        
+        <ApiDocs />
+        
       </main>
     </div>
   );

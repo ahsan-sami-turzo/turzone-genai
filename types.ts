@@ -1,4 +1,3 @@
-
 export enum Status {
   Idle = 'Idle',
   Pending = 'Pending',
@@ -15,4 +14,9 @@ export interface PipelineStep {
 export interface RequestLog {
   timestamp: number;
   prompt: string;
+}
+
+export interface GenerationResult {
+  description: string;
+  seoKeywords: string[];
 }
