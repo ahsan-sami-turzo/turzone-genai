@@ -1,0 +1,5 @@
+{
+  "name": "AI Product Description Generator",
+  "description": "An intelligent tool to generate compelling product descriptions. Features include rate limiting, prompt validation, caching simulation, and optional translation to Bengali, powered by Gemini.",
+  "requestFramePermissions": []
+}
